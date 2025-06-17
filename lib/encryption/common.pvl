@@ -17,11 +17,6 @@ fun msgKey(SharedKey, Plaintext): MsgKey.
 fun kdfKey(SharedKey, MsgKey): SharedKey.
 fun kdfIV (SharedKey, MsgKey): Nonce.
 
-(* Хеш-сумма от сессионного ключа *)
-letfun fps(k: SessionKey) =
-  hashIdeal(sess2bit(k)).
-
-
 (******************************************************************************)
 (* Асимметричное шифрование                                                   *)
 (******************************************************************************)
@@ -65,8 +60,3 @@ reduc forall m: Plaintext, k: SharedKey, iv: Nonce, r: Coin;
 letfun AES_ige_enc(m: Plaintext, k: SharedKey, iv: Nonce) =
   new r: Coin;
   internal_AES_ige_enc(m, k, iv, r).
-
-(* 
- * Возможное моделирование изменяемости (не включено):
- * mal(c, m’, iv’) = AES_ige_dec(m’, k, iv’)
- *)

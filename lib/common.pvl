@@ -18,10 +18,8 @@ type ProcessID.      (* Идентификатор процесса, испол�
 
 (* Функции преобразования типов *)
 fun auth2shared(AuthKey)    : SharedKey  [typeConverter].
-fun sess2shared(SessionKey) : SharedKey  [typeConverter].
 fun shared2auth(SharedKey)  : AuthKey    [typeConverter].
 fun auth2bit(AuthKey)       : bitstring  [typeConverter].
-fun shared2bit(SharedKey)   : bitstring  [typeConverter].
 fun sess2bit(SessionKey)    : bitstring  [typeConverter].
 fun nonce2bit(Nonce)        : bitstring  [typeConverter].
 fun pk2bit(PubKey)          : bitstring  [typeConverter].
@@ -45,7 +43,6 @@ free Server   : Principal.  (* Сервер Telegram *)
 type Modulus.
 type G.       (* Групповые элементы *)
 type Z.       (* Целые числа (показатели) *)
-type DHParam.
 
 (* Преобразование группового элемента в ключ *)
 fun group2sess(G) : SessionKey [typeConverter].
@@ -67,17 +64,6 @@ fun dhExp(Modulus, G, Z): G
   reduc     forall p: Modulus, a: G, x: Z; dhExp(WEAK,   a,   x) = BAD
   otherwise forall p: Modulus, a: G, x: Z; dhExp(STRONG, BAD, x) = BAD
   otherwise forall p: Modulus, a: G, x: Z; dhExp(STRONG, a,   x) = dhExpIdeal(a,x).
-
-(* Удобные функции генерации ключей *)
-letfun genSessionKey(p: Modulus, g: G, x: Z, y: Z) =
-  group2sess(dhExp(p, dhExp(p, g, x), y)).
-
-letfun genStrongSessionKey(x: Z, y: Z) =
-  group2sess(dhExpIdeal(dhExpIdeal(GOOD, x), y)).
-
-letfun genWeakSessionKey() =
-  group2sess(BAD).
-
 
 (******************************************************************************)
 (* Хеш-функции, включая функцию с коллизиями                                  *)
@@ -111,12 +97,6 @@ table AuthKeyClientTable(Principal, Principal, AuthKey).
 
 (* Авторизационный ключ клиента (для сервера) — по его отпечатку *)
 table AuthKeyServerTable(HashValue, AuthKey).
-
-(* Состояние клиента в секретном чате *)
-table SecretChatClientTable(Principal, Principal, Principal, Modulus, G, Z, ChatID, SessionKey).
-
-(* Состояние клиента после рекейинга *)
-table RekeyingClientTable(Principal, Principal, Principal, Modulus, G, Z, ChatID, SessionKey).
 
 
 (******************************************************************************)

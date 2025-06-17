@@ -182,13 +182,8 @@ let RegisterRSAKey(server: Principal) =
   0.
 
 (* Компрометация *)
-let RevealRSAKey() = get RSAServerKeyTable(server, sk, _) in event RevealedRSAKey(sk); out(io, sk).
 let RevealAuthKey() = get AuthKeyClientTable(_, _, k) in event RevealedAuthKey(k); out(io, k).
 let RevealServerAuthKey() = get AuthKeyServerTable(_, k) in event RevealedServerAuthKey(k); out(io, k).
-let RevealNk() = get AuthProtClientEphemeralSecrets(nk, _) in event RevealedNk(nk); out(io, nk).
-let RevealAuthProtClientExponent() = get AuthProtClientEphemeralSecrets(_, b) in event RevealedAuthProtClientExponent(b); out(io, b).
-let RevealAuthProtClientEphemeralSecrets() = get AuthProtClientEphemeralSecrets(nk, b) in event RevealedAuthProtClientEphemeralSecrets(nk, b); event RevealedNk(nk); event RevealedAuthProtClientExponent(b); out(io, (nk, b)).
-let RevealAuthProtServerExponent() = get AuthProtServerEphemeralSecrets(a) in event RevealedAuthProtServerExponent(a); out(io, a).
 
 (* Пост-компрометация *)
 let PostCompromiseRSAKey() = phase 1; get RSAServerKeyTable(_, sk, _) in event PostCompromisedRSAKey(sk); out(io, sk).
@@ -200,10 +195,3 @@ let PostCompromiseAuthProtServerExponent() = phase 1; get AuthProtServerEphemera
 (* Генерация DH-параметров *)
 let GenGoodDHParameters() = insert DiffieHellmanParametersTable(STRONG, GOOD).
 let GenBadDHParameters() = new g: G; insert DiffieHellmanParametersTable(WEAK, g); insert DiffieHellmanParametersTable(STRONG, BAD); out(io, g).
-
-(* Регистрация ключа авторизации злоумышленником *)
-let RegisterAuthKey() =
-  in(io, (X: Principal, k: AuthKey));
-  if X <> Alice && X <> Bob then
-    insert AuthKeyServerTable(keyID(auth2shared(k)), k);
-    0.
