@@ -1,0 +1,145 @@
+(******************************************************************************)
+(* Общие типы                                                                 *)
+(******************************************************************************)
+
+type Principal.      (* Участник протокола *)
+type Message.        (* Обобщённое сообщение: обычно шифртекст + данные *)
+type Nonce.          (* Одноразовое значение *)
+type Plaintext.      (* Входное сообщение для шифрования *)
+type Ciphertext.     (* Результат шифрования *)
+type PrivKey.        (* Приватный RSA-ключ *)
+type PubKey.         (* Публичный RSA-ключ *)
+type SharedKey.      (* Общий (симметричный) ключ *)
+type AuthKey.        (* Авторизационный ключ клиент-сервер *)
+type SessionKey.     (* Сессионный ключ для секретных чатов *)
+type HashValue.      (* Результат хеш-функции *)
+type ChatID.         (* Идентификатор чата *)
+type ProcessID.      (* Идентификатор процесса, используется в событиях *)
+
+(* Функции преобразования типов *)
+fun auth2shared(AuthKey)    : SharedKey  [typeConverter].
+fun sess2shared(SessionKey) : SharedKey  [typeConverter].
+fun shared2auth(SharedKey)  : AuthKey    [typeConverter].
+fun auth2bit(AuthKey)       : bitstring  [typeConverter].
+fun shared2bit(SharedKey)   : bitstring  [typeConverter].
+fun sess2bit(SessionKey)    : bitstring  [typeConverter].
+fun nonce2bit(Nonce)        : bitstring  [typeConverter].
+fun pk2bit(PubKey)          : bitstring  [typeConverter].
+
+
+(******************************************************************************)
+(* Свободные имена                                                            *)
+(******************************************************************************)
+
+free io       : channel.
+free Alice    : Principal.  (* Честный клиент *)
+free Bob      : Principal.  (* Другой честный клиент *)
+free Server   : Principal.  (* Сервер Telegram *)
+
+
+(******************************************************************************)
+(* Диффи-Хеллман и атаки на малую/плохую подгруппу                            *)
+(* См. Bhargavan, Blanchet и Kobeissi, 2017                                   *)
+(******************************************************************************)
+
+type Modulus.
+type G.       (* Групповые элементы *)
+type Z.       (* Целые числа (показатели) *)
+type DHParam.
+
+(* Преобразование группового элемента в ключ *)
+fun group2sess(G) : SessionKey [typeConverter].
+fun group2auth(G) : AuthKey    [typeConverter].
+
+const STRONG      : Modulus [data].
+const WEAK        : Modulus [data].
+const BAD         : G       [data].
+const GOOD        : G       [data].
+
+(* Идеальная экспонента DH *)
+fun dhExpIdeal(G,Z): G.
+
+equation forall x: Z, y: Z;
+  dhExpIdeal(dhExpIdeal(GOOD,x),y) = dhExpIdeal(dhExpIdeal(GOOD,y),x).
+
+(* DH с учётом слабых групп и плохих элементов *)
+fun dhExp(Modulus, G, Z): G
+  reduc     forall p: Modulus, a: G, x: Z; dhExp(WEAK,   a,   x) = BAD
+  otherwise forall p: Modulus, a: G, x: Z; dhExp(STRONG, BAD, x) = BAD
+  otherwise forall p: Modulus, a: G, x: Z; dhExp(STRONG, a,   x) = dhExpIdeal(a,x).
+
+(* Удобные функции генерации ключей *)
+letfun genSessionKey(p: Modulus, g: G, x: Z, y: Z) =
+  group2sess(dhExp(p, dhExp(p, g, x), y)).
+
+letfun genStrongSessionKey(x: Z, y: Z) =
+  group2sess(dhExpIdeal(dhExpIdeal(GOOD, x), y)).
+
+letfun genWeakSessionKey() =
+  group2sess(BAD).
+
+
+(******************************************************************************)
+(* Хеш-функции, включая функцию с коллизиями                                  *)
+(******************************************************************************)
+
+type HashAlg.
+
+const WEAK_HASH  : HashAlg   [data].
+const COLLISION  : HashValue [data].
+
+fun hashIdeal(bitstring): HashValue.
+
+(* Хеш-функция с возможной коллизией *)
+fun hash(HashAlg, bitstring): HashValue
+  reduc     forall x: bitstring; hash(WEAK_HASH, x) = COLLISION
+  otherwise forall x: bitstring, h: HashAlg; hash(h,x) = hashIdeal(x).
+
+
+(******************************************************************************)
+(* Таблицы                                                                    *)
+(******************************************************************************)
+
+(* RSA-ключи сервера (видны только серверу) *)
+table RSAServerKeyTable(Principal, PrivKey, PubKey).
+
+(* Публичные ключи серверов с отпечатками (для клиентов) *)
+table RSAPublicKeyTable(Principal, PubKey, HashValue).
+
+(* Авторизационный ключ клиента (для клиента) *)
+table AuthKeyClientTable(Principal, Principal, AuthKey).
+
+(* Авторизационный ключ клиента (для сервера) — по его отпечатку *)
+table AuthKeyServerTable(HashValue, AuthKey).
+
+(* Состояние клиента в секретном чате *)
+table SecretChatClientTable(Principal, Principal, Principal, Modulus, G, Z, ChatID, SessionKey).
+
+(* Состояние клиента после рекейинга *)
+table RekeyingClientTable(Principal, Principal, Principal, Modulus, G, Z, ChatID, SessionKey).
+
+
+(******************************************************************************)
+(* Дополнительные функции                                                     *)
+(******************************************************************************)
+
+(* Публичный ключ по приватному *)
+fun pk(PrivKey): PubKey.
+
+(* Проверка: X — один из Y или Z *)
+fun choosePrincipal(Principal, Principal, Principal): Principal
+  reduc forall X: Principal, Y: Principal;
+    choosePrincipal(X,X,Y) = X
+  otherwise forall X: Principal, Y: Principal;
+    choosePrincipal(Y,X,Y) = Y.
+
+(* Возвращает другого участника: если X=Y, то Z; если X=Z, то Y *)
+fun chooseOtherPrincipal(Principal, Principal, Principal): Principal
+  reduc forall X, Y: Principal;
+    chooseOtherPrincipal(X,X,Y) = Y
+  otherwise forall X,Y: Principal;
+    chooseOtherPrincipal(X,Y,X) = Y.
+
+(* Проверка условия, вызывает сбой при false *)
+fun continue_if(bool): bool
+  reduc continue_if(true) = true.

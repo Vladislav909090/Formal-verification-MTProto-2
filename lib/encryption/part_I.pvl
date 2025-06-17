@@ -1,0 +1,25 @@
+(*
+ * MTProto 2.0: Шифрование (облачные чаты) — часть I
+ *)
+
+(* Шифрование: AuthKey × сообщение → зашифрованное сообщение *)
+letfun encodeCloudChatMsg(m: Plaintext, k: AuthKey) =
+  let k' = auth2shared(k) in
+  let mk = msgKey(k',m) in
+  MTPROTO(keyID(k'), mk, AES_ige_enc(m, kdfKey(k',mk), kdfIV(k',mk))).
+
+(* Расшифровка на сервере: AuthKey × сообщение → (исходный текст, AuthKey) *)
+letfun serverDecodeCloudChatMsg(m: Message) =
+  let MTPROTO(key_id, mk, c) = m in
+  get AuthKeyServerTable(=key_id, shared2auth(k)) in
+  let d = AES_ige_dec(c, kdfKey(k, mk), kdfIV(k,mk)) in
+  let (=mk) = msgKey(k,d) in
+  (d, shared2auth(k)).
+
+(* Расшифровка на клиенте: AuthKey × сообщение → исходный текст *)
+letfun clientDecodeCloudChatMsg(m: Message, k: AuthKey) =
+  let k' = auth2shared(k) in
+  let MTPROTO(=keyID(k'), mk, c) = m in
+  let d = AES_ige_dec(c, kdfKey(k',mk), kdfIV(k',mk)) in
+  let (=mk) = msgKey(k',d) in
+  d.

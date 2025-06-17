@@ -1,0 +1,41 @@
+(*
+ * MTProto 2.0: Облачные чаты
+ *
+ * Модель протокола обмена сообщениями между клиентом и сервером (облачные чаты)
+ * с использованием долгосрочного общего ключа между клиентом и сервером Telegram.
+ *)
+
+(*
+ * Секретность сообщения должна сохраняться для сессий, которые прошли корректно,
+ * даже если некоторая информация раскрыта после завершения сессии (идеальная прямая секретность).
+ *
+ * Этот запрос показывает, что PFS (идеальная прямая секретность) не гарантируется в облачных чатах.
+ *)
+query s: Nonce, m: bitstring, k: AuthKey, nk: Nonce, a,b: Z, sk: PrivKey;
+  event(ClientReceivesCloudMessage(s, m, k))
+  && attacker(m)
+  ==> event(PostCompromisedAuthKey(k))
+  ||  event(PostCompromisedRSAKey(sk))
+  || (event(PostCompromisedNk(nk)) && event(PostCompromisedAuthProtClientExponent(b)))
+  || (event(PostCompromisedNk(nk)) && event(PostCompromisedAuthProtServerExponent(a)))
+  || (event(PostCompromisedAuthProtClientExponent(b)) && event(PostCompromisedAuthProtServerExponent(a))).
+(* ✔️ Ожидаемый результат: true *)
+
+(* Основной процесс *)
+
+process
+  let weakDiffieHellman = false in
+  (0
+    | !RegisterRSAKey(Server)
+    | !ServerAuth(Server)
+    | !ClientAuth(Server, weakDiffieHellman)
+    | !ServerCloudChat()
+    | !ClientCloudChat(Server)
+    | !GenGoodDHParameters()
+    (* Посткомпрометационные атаки *)
+    | !PostCompromiseRSAKey()
+    | !PostCompromiseAuthKey()
+    | !PostCompromiseNk()
+    | !PostCompromiseAuthProtClientExponent()
+    | !PostCompromiseAuthProtServerExponent()
+  )

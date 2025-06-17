@@ -1,0 +1,72 @@
+(******************************************************************************)
+(* MTProto 2.0: общие определения шифрования                                  *)
+(******************************************************************************)
+
+type MsgKey.  (* 128-битный MAC, вычисленный по сообщению и общему ключу *)
+
+(* Конструктор зашифрованного сообщения MTProto *)
+fun MTPROTO(HashValue, MsgKey, Ciphertext): Message [data].
+
+(* Вычисление идентификатора ключа — 64 младших бита SHA-1 хеша ключа *)
+fun keyID(SharedKey): HashValue.
+
+(* Вычисление msg_key как середины SHA-256 от k[88+x:120+x) | сообщение | паддинг *)
+fun msgKey(SharedKey, Plaintext): MsgKey.
+
+(* Генерация симметричного ключа и IV на основе authKey и msgKey *)
+fun kdfKey(SharedKey, MsgKey): SharedKey.
+fun kdfIV (SharedKey, MsgKey): Nonce.
+
+(* Хеш-сумма от сессионного ключа *)
+letfun fps(k: SessionKey) =
+  hashIdeal(sess2bit(k)).
+
+
+(******************************************************************************)
+(* Асимметричное шифрование                                                   *)
+(******************************************************************************)
+
+(* 
+ * Используем детерминированное шифрование для ускорения анализа.
+ * Подходит, т.к. ProVerif моделирует аутентифицированное шифрование.
+ * В MTProto используется на втором этапе авторизации — для передачи nonce nk.
+ *)
+
+(* Версия с рандомизацией *)
+type Coin.
+
+fun internal_RSA_enc(Plaintext, PubKey, Coin): Ciphertext.
+
+reduc forall m: Plaintext, k: PrivKey, r: Coin;
+  RSA_dec(internal_RSA_enc(m,pk(k),r),k) = m.
+
+(* Обёртка: RSA-шифрование с генерацией случайности *)
+letfun RSA_enc(m: Plaintext, pk: PubKey) =
+  new r: Coin;
+  internal_RSA_enc(m,pk,r).
+
+
+(******************************************************************************)
+(* Симметричное шифрование                                                    *)
+(******************************************************************************)
+
+(*
+ * MTProto 2.0 использует AES в режиме IGE (Infinite Garble Extension).
+ * IV — 32 байта (двойной блок), как в реализации Telegram Desktop (OpenSSL).
+ * IGE моделируется как совершенное шифрование: без возможности подделки.
+ *)
+
+fun internal_AES_ige_enc(Plaintext, SharedKey, Nonce, Coin): Ciphertext.
+
+reduc forall m: Plaintext, k: SharedKey, iv: Nonce, r: Coin;
+  AES_ige_dec(internal_AES_ige_enc(m,k,iv,r),k,iv) = m.
+
+(* Обёртка: AES-IGE с генерацией случайности *)
+letfun AES_ige_enc(m: Plaintext, k: SharedKey, iv: Nonce) =
+  new r: Coin;
+  internal_AES_ige_enc(m, k, iv, r).
+
+(* 
+ * Возможное моделирование изменяемости (не включено):
+ * mal(c, m’, iv’) = AES_ige_dec(m’, k, iv’)
+ *)

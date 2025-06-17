@@ -1,0 +1,591 @@
+(******************************************************************************)
+(* Общие типы                                                                 *)
+(******************************************************************************)
+
+type Principal.      (* Участник протокола *)
+type Message.        (* Обобщённое сообщение: обычно шифртекст + данные *)
+type Nonce.          (* Одноразовое значение *)
+type Plaintext.      (* Входное сообщение для шифрования *)
+type Ciphertext.     (* Результат шифрования *)
+type PrivKey.        (* Приватный RSA-ключ *)
+type PubKey.         (* Публичный RSA-ключ *)
+type SharedKey.      (* Общий (симметричный) ключ *)
+type AuthKey.        (* Авторизационный ключ клиент-сервер *)
+type SessionKey.     (* Сессионный ключ для секретных чатов *)
+type HashValue.      (* Результат хеш-функции *)
+type ChatID.         (* Идентификатор чата *)
+type ProcessID.      (* Идентификатор процесса, используется в событиях *)
+
+(* Функции преобразования типов *)
+fun auth2shared(AuthKey)    : SharedKey  [typeConverter].
+fun sess2shared(SessionKey) : SharedKey  [typeConverter].
+fun shared2auth(SharedKey)  : AuthKey    [typeConverter].
+fun auth2bit(AuthKey)       : bitstring  [typeConverter].
+fun shared2bit(SharedKey)   : bitstring  [typeConverter].
+fun sess2bit(SessionKey)    : bitstring  [typeConverter].
+fun nonce2bit(Nonce)        : bitstring  [typeConverter].
+fun pk2bit(PubKey)          : bitstring  [typeConverter].
+
+
+(******************************************************************************)
+(* Свободные имена                                                            *)
+(******************************************************************************)
+
+free io       : channel.
+free Alice    : Principal.  (* Честный клиент *)
+free Bob      : Principal.  (* Другой честный клиент *)
+free Server   : Principal.  (* Сервер Telegram *)
+
+
+(******************************************************************************)
+(* Диффи-Хеллман и атаки на малую/плохую подгруппу                            *)
+(* См. Bhargavan, Blanchet и Kobeissi, 2017                                   *)
+(******************************************************************************)
+
+type Modulus.
+type G.       (* Групповые элементы *)
+type Z.       (* Целые числа (показатели) *)
+type DHParam.
+
+(* Преобразование группового элемента в ключ *)
+fun group2sess(G) : SessionKey [typeConverter].
+fun group2auth(G) : AuthKey    [typeConverter].
+
+const STRONG      : Modulus [data].
+const WEAK        : Modulus [data].
+const BAD         : G       [data].
+const GOOD        : G       [data].
+
+(* Идеальная экспонента DH *)
+fun dhExpIdeal(G,Z): G.
+
+equation forall x: Z, y: Z;
+  dhExpIdeal(dhExpIdeal(GOOD,x),y) = dhExpIdeal(dhExpIdeal(GOOD,y),x).
+
+(* DH с учётом слабых групп и плохих элементов *)
+fun dhExp(Modulus, G, Z): G
+  reduc     forall p: Modulus, a: G, x: Z; dhExp(WEAK,   a,   x) = BAD
+  otherwise forall p: Modulus, a: G, x: Z; dhExp(STRONG, BAD, x) = BAD
+  otherwise forall p: Modulus, a: G, x: Z; dhExp(STRONG, a,   x) = dhExpIdeal(a,x).
+
+(* Удобные функции генерации ключей *)
+letfun genSessionKey(p: Modulus, g: G, x: Z, y: Z) =
+  group2sess(dhExp(p, dhExp(p, g, x), y)).
+
+letfun genStrongSessionKey(x: Z, y: Z) =
+  group2sess(dhExpIdeal(dhExpIdeal(GOOD, x), y)).
+
+letfun genWeakSessionKey() =
+  group2sess(BAD).
+
+
+(******************************************************************************)
+(* Хеш-функции, включая функцию с коллизиями                                  *)
+(******************************************************************************)
+
+type HashAlg.
+
+const WEAK_HASH  : HashAlg   [data].
+const COLLISION  : HashValue [data].
+
+fun hashIdeal(bitstring): HashValue.
+
+(* Хеш-функция с возможной коллизией *)
+fun hash(HashAlg, bitstring): HashValue
+  reduc     forall x: bitstring; hash(WEAK_HASH, x) = COLLISION
+  otherwise forall x: bitstring, h: HashAlg; hash(h,x) = hashIdeal(x).
+
+
+(******************************************************************************)
+(* Таблицы                                                                    *)
+(******************************************************************************)
+
+(* RSA-ключи сервера (видны только серверу) *)
+table RSAServerKeyTable(Principal, PrivKey, PubKey).
+
+(* Публичные ключи серверов с отпечатками (для клиентов) *)
+table RSAPublicKeyTable(Principal, PubKey, HashValue).
+
+(* Авторизационный ключ клиента (для клиента) *)
+table AuthKeyClientTable(Principal, Principal, AuthKey).
+
+(* Авторизационный ключ клиента (для сервера) — по его отпечатку *)
+table AuthKeyServerTable(HashValue, AuthKey).
+
+(* Состояние клиента в секретном чате *)
+table SecretChatClientTable(Principal, Principal, Principal, Modulus, G, Z, ChatID, SessionKey).
+
+(* Состояние клиента после рекейинга *)
+table RekeyingClientTable(Principal, Principal, Principal, Modulus, G, Z, ChatID, SessionKey).
+
+
+(******************************************************************************)
+(* Дополнительные функции                                                     *)
+(******************************************************************************)
+
+(* Публичный ключ по приватному *)
+fun pk(PrivKey): PubKey.
+
+(* Проверка: X — один из Y или Z *)
+fun choosePrincipal(Principal, Principal, Principal): Principal
+  reduc forall X: Principal, Y: Principal;
+    choosePrincipal(X,X,Y) = X
+  otherwise forall X: Principal, Y: Principal;
+    choosePrincipal(Y,X,Y) = Y.
+
+(* Возвращает другого участника: если X=Y, то Z; если X=Z, то Y *)
+fun chooseOtherPrincipal(Principal, Principal, Principal): Principal
+  reduc forall X, Y: Principal;
+    chooseOtherPrincipal(X,X,Y) = Y
+  otherwise forall X,Y: Principal;
+    chooseOtherPrincipal(X,Y,X) = Y.
+
+(* Проверка условия, вызывает сбой при false *)
+fun continue_if(bool): bool
+  reduc continue_if(true) = true.
+(******************************************************************************)
+(* MTProto 2.0: общие определения шифрования                                  *)
+(******************************************************************************)
+
+type MsgKey.  (* 128-битный MAC, вычисленный по сообщению и общему ключу *)
+
+(* Конструктор зашифрованного сообщения MTProto *)
+(* См. https://core.telegram.org/mtproto/description#encrypted-message *)
+fun MTPROTO(HashValue, MsgKey, Ciphertext): Message [data].
+
+(* Вычисление идентификатора ключа — 64 младших бита SHA-1 хеша ключа *)
+fun keyID(SharedKey): HashValue.
+
+(* Вычисление msg_key как середины SHA-256 от k[88+x:120+x) | сообщение | паддинг *)
+fun msgKey(SharedKey, Plaintext): MsgKey.
+
+(* Генерация симметричного ключа и IV на основе authKey и msgKey *)
+fun kdfKey(SharedKey, MsgKey): SharedKey.
+fun kdfIV (SharedKey, MsgKey): Nonce.
+
+(* Хеш-сумма от сессионного ключа *)
+letfun fps(k: SessionKey) =
+  hashIdeal(sess2bit(k)).
+
+
+(******************************************************************************)
+(* Асимметричное шифрование                                                   *)
+(******************************************************************************)
+
+(* 
+ * Используем детерминированное шифрование для ускорения анализа.
+ * Подходит, т.к. ProVerif моделирует аутентифицированное шифрование.
+ * В MTProto используется на втором этапе авторизации — для передачи nonce nk.
+ *)
+
+(* Версия с рандомизацией *)
+type Coin.
+
+fun internal_RSA_enc(Plaintext, PubKey, Coin): Ciphertext.
+
+reduc forall m: Plaintext, k: PrivKey, r: Coin;
+  RSA_dec(internal_RSA_enc(m,pk(k),r),k) = m.
+
+(* Обёртка: RSA-шифрование с генерацией случайности *)
+letfun RSA_enc(m: Plaintext, pk: PubKey) =
+  new r: Coin;
+  internal_RSA_enc(m,pk,r).
+
+
+(******************************************************************************)
+(* Симметричное шифрование                                                    *)
+(******************************************************************************)
+
+(*
+ * MTProto 2.0 использует AES в режиме IGE (Infinite Garble Extension).
+ * IV — 32 байта (двойной блок), как в реализации Telegram Desktop (OpenSSL).
+ * IGE моделируется как совершенное шифрование: без возможности подделки.
+ *)
+
+fun internal_AES_ige_enc(Plaintext, SharedKey, Nonce, Coin): Ciphertext.
+
+reduc forall m: Plaintext, k: SharedKey, iv: Nonce, r: Coin;
+  AES_ige_dec(internal_AES_ige_enc(m,k,iv,r),k,iv) = m.
+
+(* Обёртка: AES-IGE с генерацией случайности *)
+letfun AES_ige_enc(m: Plaintext, k: SharedKey, iv: Nonce) =
+  new r: Coin;
+  internal_AES_ige_enc(m, k, iv, r).
+
+(* 
+ * Возможное моделирование изменяемости (не включено):
+ * mal(c, m’, iv’) = AES_ige_dec(m’, k, iv’)
+ *)
+(* Хеш отпечатка публичного ключа сервера *)
+letfun fpk(pk: PubKey) =
+  hashIdeal(pk2bit(pk)).
+
+(* Генерация сессионного ключа и IV для AES *)
+fun genKey(Nonce, Nonce): SharedKey.
+fun genIV (Nonce, Nonce): Nonce.
+
+(* Шифрование запроса DH-параметров через RSA *)
+letfun encodeRequestDHParams(m: Plaintext, pk: PubKey) =
+  RSA_enc(m, pk).
+
+(* Расшифровка запроса DH-параметров через RSA *)
+letfun decodeRequestDHParams(c: Ciphertext, sk: PrivKey) =
+  RSA_dec(c, sk).
+
+(* Шифрование сообщения авторизации через AES-IGE *)
+letfun encodeAuthorizationMsg(m: Plaintext, ns: Nonce, nk: Nonce) =
+  AES_ige_enc(m, genKey(ns,nk), genIV(ns,nk)).
+
+(* Расшифровка сообщения авторизации через AES-IGE *)
+letfun decodeAuthorizatioMsg(c: Ciphertext, ns: Nonce, nk: Nonce) =
+  AES_ige_dec(c, genKey(ns,nk), genIV(ns,nk)).
+
+(* Хеширование nk и ключа авторизации *)
+letfun hashNk(nk: Nonce, authKey: AuthKey) =
+  hashIdeal((nonce2bit(nk), auth2bit(authKey))).
+(*
+ * MTProto 2.0: Шифрование (облачные чаты) — часть I
+ * См. https://core.telegram.org/mtproto/description
+ *)
+
+(* Шифрование: AuthKey × сообщение → зашифрованное сообщение *)
+letfun encodeCloudChatMsg(m: Plaintext, k: AuthKey) =
+  let k' = auth2shared(k) in
+  let mk = msgKey(k',m) in
+  MTPROTO(keyID(k'), mk, AES_ige_enc(m, kdfKey(k',mk), kdfIV(k',mk))).
+
+(* Расшифровка на сервере: AuthKey × сообщение → (исходный текст, AuthKey) *)
+letfun serverDecodeCloudChatMsg(m: Message) =
+  let MTPROTO(key_id, mk, c) = m in
+  get AuthKeyServerTable(=key_id, shared2auth(k)) in
+  let d = AES_ige_dec(c, kdfKey(k, mk), kdfIV(k,mk)) in
+  let (=mk) = msgKey(k,d) in
+  (d, shared2auth(k)).
+
+(* Расшифровка на клиенте: AuthKey × сообщение → исходный текст *)
+letfun clientDecodeCloudChatMsg(m: Message, k: AuthKey) =
+  let k' = auth2shared(k) in
+  let MTPROTO(=keyID(k'), mk, c) = m in
+  let d = AES_ige_dec(c, kdfKey(k',mk), kdfIV(k',mk)) in
+  let (=mk) = msgKey(k',d) in
+  d.
+(*
+ * MTProto 2.0: Создание авторизационного ключа
+ *
+ * Модель протокола создания долгосрочного общего ключа между клиентом и сервером Telegram.
+ * См. https://core.telegram.org/mtproto/auth_key
+ *)
+
+(******************************************************************************)
+(* Абстрактные криптографические примитивы                                   *)
+(* Определяются отдельно, чтобы не привязывать реализацию шифрования к этому файлу. *)
+(******************************************************************************)
+
+(* fpk(PubKey): HashValue — отпечаток публичного ключа *)
+(* keyID(SharedKey): HashValue — идентификатор ключа *)
+(* encodeRequestDHParams: шифрование запроса DH-параметров (RSA) *)
+(* decodeRequestDHParams: расшифровка запроса DH-параметров (RSA) *)
+(* encodeAuthorizationMsg / decodeAuthorizationMsg: AES-шифрование с IV *)
+(* hashNk: хеш по nk и ключу авторизации *)
+
+
+(******************************************************************************)
+(* Разложение на простые множители — для доказательства работы, не используется *)
+(******************************************************************************)
+
+type Prime.
+fun mult(Prime, Prime): bitstring.
+reduc forall x: Prime, y: Prime;
+  factorise(mult(x,y)) = (x,y).
+
+
+(******************************************************************************)
+(* Обмен сообщениями в протоколе авторизации                                 *)
+(******************************************************************************)
+
+(* Раунд 1 *)
+fun NC(Nonce): Message [data].                     (* Клиент → Сервер *)
+fun NS(Nonce, Nonce, HashValue): Message [data].   (* Сервер → Клиент *)
+
+(* Раунд 2 *)
+fun REQDH(Nonce, Nonce, Ciphertext): Message [data]. (* Клиент → Сервер *)
+fun DH(Nonce, Nonce, Ciphertext): Message [data].    (* Сервер → Клиент *)
+
+(* Раунд 3 *)
+fun ENDH(Nonce, Nonce, Ciphertext): Message [data]. (* Клиент → Сервер *)
+fun ACK(Nonce, Nonce, HashValue): Message [data].   (* Сервер → Клиент *)
+
+(* Зашифрованные данные внутри сообщений *)
+fun D1(Nonce, Nonce, Nonce): Plaintext [data].           (* запрос DH *)
+fun AN(Nonce, Nonce, Modulus, G, G): Plaintext [data].   (* ответ с DH *)
+fun D2(Nonce, Nonce, G): Plaintext [data].               (* завершение DH *)
+
+
+(******************************************************************************)
+(* Состояние (таблицы)                                                       *)
+(******************************************************************************)
+
+table AuthProtClientEphemeralSecrets(Nonce, Z).                      (* секреты клиента *)
+table AuthProtClientSessionState(Nonce, Nonce, Nonce, Modulus, G, G, Z).
+table AuthProtServerEphemeralSecrets(Z).                             (* секрет сервера *)
+table AuthProtServerSessionState(Nonce, Nonce, Nonce, Modulus, G, G, Z).
+table DiffieHellmanParametersTable(Modulus, G).                      (* DH-параметры *)
+
+
+(******************************************************************************)
+(* События                                                                   *)
+(******************************************************************************)
+
+(* Клиент начинает сессию авторизации *)
+event ClientStartsSession(Nonce).
+event ClientGetsServerPublicKey(Nonce, PubKey).
+event ClientRequestsDHParameters(Nonce, Nonce, Nonce).
+event ClientReceivesDHParameters(Nonce, Nonce, Nonce, Modulus, G, G).
+event ClientChecksDHParameters(Nonce, Nonce, Nonce, Modulus, G, G, bool).
+event ClientAcceptsDHParameters(Nonce, Nonce, Nonce, Modulus, G, G).
+event ClientEndsDHExchange(Nonce, Nonce, Nonce, Modulus, G, G, Z, AuthKey).
+event ClientAcceptsAuthKey(Nonce, Nonce, Nonce, Modulus, G, G, Z, AuthKey).
+event ClientReceivesAck(Nonce, Nonce, Nonce, Modulus, G, G, Z, AuthKey).
+
+(* Серверные события *)
+event ServerReceivesRequest(Nonce).
+event ServerGeneratesNonce(ProcessID, Nonce).
+event ServerAcceptsClient(Nonce, Nonce, Nonce).
+event ServerSendsDHParameters(Nonce, Nonce, Nonce, Modulus, G, Z).
+event ServerEndsDHExchange(Nonce, Nonce, Nonce, Modulus, G, G, Z, AuthKey).
+event ServerAcceptsAuthKey(Nonce, Nonce, Nonce, Modulus, G, G, Z, AuthKey).
+event ServerSendsAck(Nonce, Nonce, Nonce, Modulus, G, G, Z, AuthKey).
+
+(* Компрометация *)
+event RevealedRSAKey(PrivKey).
+event RevealedAuthKey(AuthKey).
+event RevealedServerAuthKey(AuthKey).
+event RevealedNk(Nonce).
+event RevealedAuthProtClientExponent(Z).
+event RevealedAuthProtClientEphemeralSecrets(Nonce, Z).
+event RevealedAuthProtServerExponent(Z).
+
+(* Компрометация после завершения протокола *)
+event PostCompromisedRSAKey(PrivKey).
+event PostCompromisedAuthKey(AuthKey).
+event PostCompromisedNk(Nonce).
+event PostCompromisedAuthProtClientExponent(Z).
+event PostCompromisedAuthProtServerExponent(Z).
+
+
+(******************************************************************************)
+(* Макросы процессов: клиент и сервер                                        *)
+(******************************************************************************)
+
+let ClientAuth(server: Principal, allowWeakDH: bool) =
+  in(io, X: Principal);
+  let cUser = choosePrincipal(X, Alice, Bob) in
+  new nk: Nonce;
+  new b: Z;
+  insert AuthProtClientEphemeralSecrets(nk, b);
+  new nc: Nonce;
+  event ClientStartsSession(nc);
+  out(io, NC(nc));
+  in(io, NS(=nc, ns, fp));
+  get RSAPublicKeyTable(=server, pks, =fp) in
+  event ClientGetsServerPublicKey(nc, pks);
+  let encData1 = encodeRequestDHParams(D1(nc, ns, nk), pks) in
+  event ClientRequestsDHParameters(nc, ns, nk);
+  out(io, REQDH(nc, ns, encData1));
+  in(io, DH(=nc, =ns, encAnswer: Ciphertext));
+  let AN(=nc, =ns, p, g, g_a) = decodeAuthorizatioMsg(encAnswer, ns, nk) in
+  event ClientReceivesDHParameters(nc, ns, nk, p, g, g_a);
+  let unused = continue_if(allowWeakDH || (p <> WEAK && g <> BAD && g_a <> BAD)) in
+  event ClientChecksDHParameters(nc, ns, nk, p, g, g_a, p <> WEAK && g <> BAD && g_a <> BAD);
+  event ClientAcceptsDHParameters(nc, ns, nk, p, g, g_a);
+  insert AuthProtClientSessionState(nc, ns, nk, p, g, g_a, b);
+  let authKey = group2auth(dhExp(p, g_a, b)) in
+  insert AuthKeyClientTable(cUser, server, authKey);
+  let g_b = dhExp(p, g, b) in
+  let encData2 = encodeAuthorizationMsg(D2(nc, ns, g_b), ns, nk) in
+  event ClientEndsDHExchange(nc, ns, nk, p, g, g_a, b, authKey);
+  event ClientAcceptsAuthKey(nc, ns, nk, p, g, g_a, b, authKey);
+  out(io, ENDH(nc, ns, encData2));
+  in(io, ACK(=nc, =ns, =hashNk(nk, authKey)));
+  event ClientReceivesAck(nc, ns, nk, p, g, g_a, b, authKey);
+  0.
+
+let ServerAuth(server: Principal) =
+  new sPID: ProcessID;
+  get RSAServerKeyTable(=server, sks, pks) in
+  get DiffieHellmanParametersTable(p,g) in
+  in(io, NC(nc));
+  event ServerReceivesRequest(nc);
+  in(io, ns: Nonce);
+  event ServerGeneratesNonce(sPID, ns);
+  out(io, NS(nc, ns, fpk(pks)));
+  in(io, REQDH(=nc, =ns, encData1: Ciphertext));
+  let D1(=nc, =ns, nk: Nonce) = decodeRequestDHParams(encData1, sks) in
+  event ServerAcceptsClient(nc, ns, nk);
+  new a: Z;
+  insert AuthProtServerEphemeralSecrets(a);
+  let g_a = dhExp(p, g, a) in
+  let encAnswer = encodeAuthorizationMsg(AN(nc, ns, p, g, g_a), ns, nk) in
+  event ServerSendsDHParameters(nc, ns, nk, p, g, a);
+  out(io, DH(nc, ns, encAnswer));
+  in(io, ENDH(=nc, =ns, encData2: Ciphertext));
+  let D2(=nc, =ns, g_b) = decodeAuthorizatioMsg(encData2, ns, nk) in
+  let authKey = group2auth(dhExp(p, g_b, a)) in
+  insert AuthKeyServerTable(keyID(auth2shared(authKey)), authKey);
+  insert AuthProtServerSessionState(nc, ns, nk, p, g, g_b, a);
+  event ServerEndsDHExchange(nc, ns, nk, p, g, g_b, a, authKey);
+  event ServerAcceptsAuthKey(nc, ns, nk, p, g, g_b, a, authKey);
+  event ServerSendsAck(nc, ns, nk, p, g, g_b, a, authKey);
+  out(io, ACK(nc, ns, hashNk(nk, authKey)));
+  0.
+
+
+(******************************************************************************)
+(* Вспомогательные процессы                                                   *)
+(******************************************************************************)
+
+let RegisterRSAKey(server: Principal) =
+  new sk: PrivKey;
+  insert RSAServerKeyTable(server, sk, pk(sk));
+  insert RSAPublicKeyTable(server, pk(sk), fpk(pk(sk)));
+  out(io, pk(sk));
+  out(io, server);
+  0.
+
+(* Компрометация *)
+let RevealRSAKey() = get RSAServerKeyTable(server, sk, _) in event RevealedRSAKey(sk); out(io, sk).
+let RevealAuthKey() = get AuthKeyClientTable(_, _, k) in event RevealedAuthKey(k); out(io, k).
+let RevealServerAuthKey() = get AuthKeyServerTable(_, k) in event RevealedServerAuthKey(k); out(io, k).
+let RevealNk() = get AuthProtClientEphemeralSecrets(nk, _) in event RevealedNk(nk); out(io, nk).
+let RevealAuthProtClientExponent() = get AuthProtClientEphemeralSecrets(_, b) in event RevealedAuthProtClientExponent(b); out(io, b).
+let RevealAuthProtClientEphemeralSecrets() = get AuthProtClientEphemeralSecrets(nk, b) in event RevealedAuthProtClientEphemeralSecrets(nk, b); event RevealedNk(nk); event RevealedAuthProtClientExponent(b); out(io, (nk, b)).
+let RevealAuthProtServerExponent() = get AuthProtServerEphemeralSecrets(a) in event RevealedAuthProtServerExponent(a); out(io, a).
+
+(* Пост-компрометация *)
+let PostCompromiseRSAKey() = phase 1; get RSAServerKeyTable(_, sk, _) in event PostCompromisedRSAKey(sk); out(io, sk).
+let PostCompromiseAuthKey() = phase 1; get AuthKeyServerTable(_, k) in event PostCompromisedAuthKey(k); out(io, k).
+let PostCompromiseNk() = phase 1; get AuthProtClientEphemeralSecrets(nk, _) in event PostCompromisedNk(nk); out(io, nk).
+let PostCompromiseAuthProtClientExponent() = phase 1; get AuthProtClientEphemeralSecrets(_, b) in event PostCompromisedAuthProtClientExponent(b); out(io, b).
+let PostCompromiseAuthProtServerExponent() = phase 1; get AuthProtServerEphemeralSecrets(a) in event PostCompromisedAuthProtServerExponent(a); out(io, a).
+
+(* Генерация DH-параметров *)
+let GenGoodDHParameters() = insert DiffieHellmanParametersTable(STRONG, GOOD).
+let GenBadDHParameters() = new g: G; insert DiffieHellmanParametersTable(WEAK, g); insert DiffieHellmanParametersTable(STRONG, BAD); out(io, g).
+
+(* Регистрация ключа авторизации злоумышленником *)
+let RegisterAuthKey() =
+  in(io, (X: Principal, k: AuthKey));
+  if X <> Alice && X <> Bob then
+    insert AuthKeyServerTable(keyID(auth2shared(k)), k);
+    0.
+(*
+ * MTProto 2.0: Облачные чаты
+ *
+ * Модель сообщений между клиентом и сервером Telegram,
+ * зашифрованных с использованием долгосрочного ключа (authorization key).
+ *
+ * См. https://core.telegram.org/mtproto/description
+ *)
+
+(******************************************************************************)
+(* Абстрактные криптопримитивы                                                *)
+(*                                                                           *)
+(* Должны быть определены ранее. Здесь не задаются, чтобы можно было         *)
+(* менять реализацию схемы шифрования независимо от этого файла.             *)
+(******************************************************************************)
+
+(* encodeCloudChatMsg(Plaintext, AuthKey): Message *)
+(* clientDecodeCloudChatMsg(Message, AuthKey): Plaintext *)
+(* serverDecodeCloudChatMsg(Message): Plaintext *)
+
+
+(******************************************************************************)
+(* События                                                                    *)
+(******************************************************************************)
+event ClientSendsCloudMessage               (Nonce, bitstring, AuthKey).
+event ClientReceivesCloudMessage            (Nonce, bitstring, AuthKey).
+event ClientSendsCloudMessageInPhaseOne     (Nonce, bitstring, AuthKey).
+
+event ServerReceivesCloudMessage            (Nonce, bitstring, AuthKey).
+event ServerSendsCloudMessage               (Nonce, bitstring, AuthKey).
+event ServerReceivesCloudMessageInPhaseOne  (Nonce, bitstring, AuthKey).
+
+
+(******************************************************************************)
+(* Вспомогательные функции                                                    *)
+(******************************************************************************)
+
+(*
+ * Конструкторы шифруемой части сообщений.
+ * Telegram использует монотонно возрастающие message_id:
+ * - сервер: id ≡ 1 или 3 (mod 4)
+ * - клиент: id кратен 4
+ *)
+fun SPT(Nonce, bitstring): Plaintext [data].  (* Server Plaintext *)
+fun CPT(Nonce, bitstring): Plaintext [data].  (* Client Plaintext *)
+
+(* Обёртка сообщения *)
+fun MSG(Message): Message [data].
+
+
+(******************************************************************************)
+(* Клиент Telegram                                                            *)
+(******************************************************************************)
+
+let ClientCloudChat(server: Principal) =
+  (* Получить идентичность клиента (Alice или Bob) *)
+  in(io, X: Principal);
+  let cUser = choosePrincipal(X, Alice, Bob) in
+
+  (* Получить авторизационный ключ для общения с сервером *)
+  get AuthKeyClientTable(=cUser, =server, authKey) in
+
+  (* Создать уникальный идентификатор сессии *)
+  new sessionID: Nonce;
+  new m1: bitstring;
+
+  event ClientSendsCloudMessage(sessionID, m1, authKey);
+
+  let msg1 = CPT(sessionID, m1) in
+  out(io, MSG(encodeCloudChatMsg(msg1, authKey)));
+
+  in(io, MSG(msg2));
+  let SPT(=sessionID, m2) = clientDecodeCloudChatMsg(msg2, authKey) in
+
+  event ClientReceivesCloudMessage(sessionID, m2, authKey);
+
+  phase 1;
+  new m3: bitstring;
+
+  let msg3 = CPT(sessionID, m3) in
+
+  event ClientSendsCloudMessageInPhaseOne(sessionID, m3, authKey);
+
+  out(io, MSG(encodeCloudChatMsg(msg3, authKey)));
+  0.
+
+
+(******************************************************************************)
+(* Сервер Telegram                                                            *)
+(******************************************************************************)
+
+let ServerCloudChat() =
+
+  in(io, MSG(msg1));
+  let (CPT(sessionID, m1), authKey: AuthKey) = serverDecodeCloudChatMsg(msg1) in
+
+  event ServerReceivesCloudMessage(sessionID, m1, authKey);
+
+  new m2: bitstring;
+
+  event ServerSendsCloudMessage(sessionID, m2, authKey);
+
+  let msg2 = SPT(sessionID, m2) in
+  out(io, MSG(encodeCloudChatMsg(msg2, authKey)));
+
+  phase 1;
+  in(io, MSG(msg3));
+  let (CPT(=sessionID, m3), =authKey) = serverDecodeCloudChatMsg(msg3) in
+
+  event ServerReceivesCloudMessageInPhaseOne(sessionID, m3, authKey);
+  0.

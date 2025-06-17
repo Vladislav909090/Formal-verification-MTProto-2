@@ -1,0 +1,27 @@
+(* Хеш отпечатка публичного ключа сервера *)
+letfun fpk(pk: PubKey) =
+  hashIdeal(pk2bit(pk)).
+
+(* Генерация сессионного ключа и IV для AES *)
+fun genKey(Nonce, Nonce): SharedKey.
+fun genIV (Nonce, Nonce): Nonce.
+
+(* Шифрование запроса DH-параметров через RSA *)
+letfun encodeRequestDHParams(m: Plaintext, pk: PubKey) =
+  RSA_enc(m, pk).
+
+(* Расшифровка запроса DH-параметров через RSA *)
+letfun decodeRequestDHParams(c: Ciphertext, sk: PrivKey) =
+  RSA_dec(c, sk).
+
+(* Шифрование сообщения авторизации через AES-IGE *)
+letfun encodeAuthorizationMsg(m: Plaintext, ns: Nonce, nk: Nonce) =
+  AES_ige_enc(m, genKey(ns,nk), genIV(ns,nk)).
+
+(* Расшифровка сообщения авторизации через AES-IGE *)
+letfun decodeAuthorizatioMsg(c: Ciphertext, ns: Nonce, nk: Nonce) =
+  AES_ige_dec(c, genKey(ns,nk), genIV(ns,nk)).
+
+(* Хеширование nk и ключа авторизации *)
+letfun hashNk(nk: Nonce, authKey: AuthKey) =
+  hashIdeal((nonce2bit(nk), auth2bit(authKey))).
