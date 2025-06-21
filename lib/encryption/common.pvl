@@ -1,33 +1,25 @@
-(******************************************************************************)
-(* MTProto 2.0: общие определения шифрования                                  *)
-(******************************************************************************)
+(* Общие определения шифрования MTProto 2.0 *)
 
-type MsgKey.  (* 128-битный MAC, вычисленный по сообщению и общему ключу *)
+type MsgKey.  (* 128-битный MAC по сообщению и ключу *)
 
-(* Конструктор зашифрованного сообщения MTProto *)
 fun MTPROTO(HashValue, MsgKey, Ciphertext): Message [data].
 
-(* Вычисление идентификатора ключа — 64 младших бита SHA-1 хеша ключа *)
+(* 64 младших бита SHA-1 хеша ключа *)
 fun keyID(SharedKey): HashValue.
 
-(* Вычисление msg_key как середины SHA-256 от k[88+x:120+x) | сообщение | паддинг *)
+(* msg_key — середина SHA-256 от k и сообщения *)
 fun msgKey(SharedKey, Plaintext): MsgKey.
 
 (* Генерация симметричного ключа и IV на основе authKey и msgKey *)
 fun kdfKey(SharedKey, MsgKey): SharedKey.
 fun kdfIV (SharedKey, MsgKey): Nonce.
 
-(******************************************************************************)
-(* Асимметричное шифрование                                                   *)
-(******************************************************************************)
+(* Хеш сессионного ключа *)
+letfun fps(k: SessionKey) =
+  hashIdeal(sess2bit(k)).
 
-(* 
- * Используем детерминированное шифрование для ускорения анализа.
- * Подходит, т.к. ProVerif моделирует аутентифицированное шифрование.
- * В MTProto используется на втором этапе авторизации — для передачи nonce nk.
- *)
+(* Асимметричное шифрование *)
 
-(* Версия с рандомизацией *)
 type Coin.
 
 fun internal_RSA_enc(Plaintext, PubKey, Coin): Ciphertext.
@@ -35,28 +27,17 @@ fun internal_RSA_enc(Plaintext, PubKey, Coin): Ciphertext.
 reduc forall m: Plaintext, k: PrivKey, r: Coin;
   RSA_dec(internal_RSA_enc(m,pk(k),r),k) = m.
 
-(* Обёртка: RSA-шифрование с генерацией случайности *)
 letfun RSA_enc(m: Plaintext, pk: PubKey) =
   new r: Coin;
   internal_RSA_enc(m,pk,r).
 
-
-(******************************************************************************)
-(* Симметричное шифрование                                                    *)
-(******************************************************************************)
-
-(*
- * MTProto 2.0 использует AES в режиме IGE (Infinite Garble Extension).
- * IV — 32 байта (двойной блок), как в реализации Telegram Desktop (OpenSSL).
- * IGE моделируется как совершенное шифрование: без возможности подделки.
- *)
+(* Симметричное шифрование *)
 
 fun internal_AES_ige_enc(Plaintext, SharedKey, Nonce, Coin): Ciphertext.
 
 reduc forall m: Plaintext, k: SharedKey, iv: Nonce, r: Coin;
   AES_ige_dec(internal_AES_ige_enc(m,k,iv,r),k,iv) = m.
 
-(* Обёртка: AES-IGE с генерацией случайности *)
 letfun AES_ige_enc(m: Plaintext, k: SharedKey, iv: Nonce) =
   new r: Coin;
   internal_AES_ige_enc(m, k, iv, r).

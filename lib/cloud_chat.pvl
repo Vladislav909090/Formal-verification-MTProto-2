@@ -1,110 +1,48 @@
 (*
- * MTProto 2.0: Облачные чаты
- *
- * Модель сообщений между клиентом и сервером Telegram,
- * зашифрованных с использованием долгосрочного ключа (authorization key).
- *
- *)
+Модель сообщений между клиентом и сервером Telegram.
+*)
 
-(**************************************************************************)
-(* Абстрактные криптопримитивы                                            *)
-(*                                                                        *)
-(* Должны быть определены ранее. Здесь не задаются, чтобы можно было      *)
-(* менять реализацию схемы шифрования независимо от этого файла.          *)
-(**************************************************************************)
+event ClientSendsCloudMessage(Nonce, bitstring, AuthKey).
+event ClientReceivesCloudMessage(Nonce, bitstring, AuthKey).
+event ClientSendsCloudMessageInPhaseOne(Nonce, bitstring, AuthKey).
+event ServerReceivesCloudMessage(Nonce, bitstring, AuthKey).
+event ServerSendsCloudMessage(Nonce, bitstring, AuthKey).
+event ServerReceivesCloudMessageInPhaseOne(Nonce, bitstring, AuthKey).
 
-(* encodeCloudChatMsg(Plaintext, AuthKey): Message *)
-(* clientDecodeCloudChatMsg(Message, AuthKey): Plaintext *)
-(* serverDecodeCloudChatMsg(Message): Plaintext *)
-
-
-(**************************************************************************)
-(* События                                                                *)
-(**************************************************************************)
-event ClientSendsCloudMessage               (Nonce, bitstring, AuthKey).
-event ClientReceivesCloudMessage            (Nonce, bitstring, AuthKey).
-event ClientSendsCloudMessageInPhaseOne     (Nonce, bitstring, AuthKey).
-
-event ServerReceivesCloudMessage            (Nonce, bitstring, AuthKey).
-event ServerSendsCloudMessage               (Nonce, bitstring, AuthKey).
-event ServerReceivesCloudMessageInPhaseOne  (Nonce, bitstring, AuthKey).
-
-
-(**************************************************************************)
-(* Вспомогательные функции                                                *)
-(**************************************************************************)
-
-(*
- * Конструкторы шифруемой части сообщений.
- * Telegram использует монотонно возрастающие message_id:
- * - сервер: id ≡ 1 или 3 (mod 4)
- * - клиент: id кратен 4
- *)
-fun SPT(Nonce, bitstring): Plaintext [data].  (* Server Plaintext *)
-fun CPT(Nonce, bitstring): Plaintext [data].  (* Client Plaintext *)
-
-(* Обёртка сообщения *)
+(* Конструкторы шифруемой части сообщений *)
+fun SPT(Nonce, bitstring): Plaintext [data].
+fun CPT(Nonce, bitstring): Plaintext [data].
 fun MSG(Message): Message [data].
 
-
-(******************************************************************************)
-(* Клиент Telegram                                                            *)
-(******************************************************************************)
-
 let ClientCloudChat(server: Principal) =
-  (* Получить идентичность клиента (Alice или Bob) *)
   in(io, X: Principal);
   let cUser = choosePrincipal(X, Alice, Bob) in
-
-  (* Получить авторизационный ключ для общения с сервером *)
   get AuthKeyClientTable(=cUser, =server, authKey) in
-
-  (* Создать уникальный идентификатор сессии *)
   new sessionID: Nonce;
   new m1: bitstring;
-
   event ClientSendsCloudMessage(sessionID, m1, authKey);
-
   let msg1 = CPT(sessionID, m1) in
   out(io, MSG(encodeCloudChatMsg(msg1, authKey)));
-
   in(io, MSG(msg2));
   let SPT(=sessionID, m2) = clientDecodeCloudChatMsg(msg2, authKey) in
-
   event ClientReceivesCloudMessage(sessionID, m2, authKey);
-
   phase 1;
   new m3: bitstring;
-
   let msg3 = CPT(sessionID, m3) in
-
   event ClientSendsCloudMessageInPhaseOne(sessionID, m3, authKey);
-
   out(io, MSG(encodeCloudChatMsg(msg3, authKey)));
   0.
 
-
-(******************************************************************************)
-(* Сервер Telegram                                                            *)
-(******************************************************************************)
-
 let ServerCloudChat() =
-
   in(io, MSG(msg1));
   let (CPT(sessionID, m1), authKey: AuthKey) = serverDecodeCloudChatMsg(msg1) in
-
   event ServerReceivesCloudMessage(sessionID, m1, authKey);
-
   new m2: bitstring;
-
   event ServerSendsCloudMessage(sessionID, m2, authKey);
-
   let msg2 = SPT(sessionID, m2) in
   out(io, MSG(encodeCloudChatMsg(msg2, authKey)));
-
   phase 1;
   in(io, MSG(msg3));
   let (CPT(=sessionID, m3), =authKey) = serverDecodeCloudChatMsg(msg3) in
-
   event ServerReceivesCloudMessageInPhaseOne(sessionID, m3, authKey);
   0.

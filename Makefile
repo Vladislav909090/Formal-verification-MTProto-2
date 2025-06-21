@@ -8,7 +8,7 @@ LIBSRC = \
     $(LIBDIR)/common.pvl \
     $(LIBDIR)/encryption/common.pvl \
     $(LIBDIR)/encryption/authorization.pvl \
-    $(LIBDIR)/encryption/part_I.pvl \
+    $(LIBDIR)/encryption/cloud_chats.pvl \
     $(LIBDIR)/authorization.pvl \
     $(LIBDIR)/cloud_chat.pvl
 
@@ -43,7 +43,6 @@ run: $(LIB)
 	fi
 	for arg in $(QUERIES); do
 		echo "=== QUERY: $$arg ==="
-		grep -m1 "Ожидаемый результат:" "$$arg" || echo ""
 		time proverif -lib $(LIB) "$$arg" | grep "RESULT"
 		echo
 	done

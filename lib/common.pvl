@@ -1,6 +1,4 @@
-(******************************************************************************)
-(* Общие типы                                                                 *)
-(******************************************************************************)
+(* Общие типы *)
 
 type Principal.      (* Участник протокола *)
 type Message.        (* Обобщённое сообщение: обычно шифртекст + данные *)
@@ -18,16 +16,16 @@ type ProcessID.      (* Идентификатор процесса, испол�
 
 (* Функции преобразования типов *)
 fun auth2shared(AuthKey)    : SharedKey  [typeConverter].
+fun sess2shared(SessionKey) : SharedKey  [typeConverter].
 fun shared2auth(SharedKey)  : AuthKey    [typeConverter].
 fun auth2bit(AuthKey)       : bitstring  [typeConverter].
+fun shared2bit(SharedKey)   : bitstring  [typeConverter].
 fun sess2bit(SessionKey)    : bitstring  [typeConverter].
 fun nonce2bit(Nonce)        : bitstring  [typeConverter].
 fun pk2bit(PubKey)          : bitstring  [typeConverter].
 
 
-(******************************************************************************)
-(* Свободные имена                                                            *)
-(******************************************************************************)
+(* Свободные имена *)
 
 free io       : channel.
 free Alice    : Principal.  (* Честный клиент *)
@@ -35,14 +33,12 @@ free Bob      : Principal.  (* Другой честный клиент *)
 free Server   : Principal.  (* Сервер Telegram *)
 
 
-(******************************************************************************)
-(* Диффи-Хеллман и атаки на малую/плохую подгруппу                            *)
-(* См. Bhargavan, Blanchet и Kobeissi, 2017                                   *)
-(******************************************************************************)
+(* DH-параметры и атаки *)
 
 type Modulus.
 type G.       (* Групповые элементы *)
 type Z.       (* Целые числа (показатели) *)
+type DHParam.
 
 (* Преобразование группового элемента в ключ *)
 fun group2sess(G) : SessionKey [typeConverter].
@@ -65,9 +61,18 @@ fun dhExp(Modulus, G, Z): G
   otherwise forall p: Modulus, a: G, x: Z; dhExp(STRONG, BAD, x) = BAD
   otherwise forall p: Modulus, a: G, x: Z; dhExp(STRONG, a,   x) = dhExpIdeal(a,x).
 
-(******************************************************************************)
-(* Хеш-функции, включая функцию с коллизиями                                  *)
-(******************************************************************************)
+(* Удобные функции генерации ключей *)
+letfun genSessionKey(p: Modulus, g: G, x: Z, y: Z) =
+  group2sess(dhExp(p, dhExp(p, g, x), y)).
+
+letfun genStrongSessionKey(x: Z, y: Z) =
+  group2sess(dhExpIdeal(dhExpIdeal(GOOD, x), y)).
+
+letfun genWeakSessionKey() =
+  group2sess(BAD).
+
+
+(* Хеш-функции *)
 
 type HashAlg.
 
@@ -82,9 +87,7 @@ fun hash(HashAlg, bitstring): HashValue
   otherwise forall x: bitstring, h: HashAlg; hash(h,x) = hashIdeal(x).
 
 
-(******************************************************************************)
-(* Таблицы                                                                    *)
-(******************************************************************************)
+(* Таблицы *)
 
 (* RSA-ключи сервера (видны только серверу) *)
 table RSAServerKeyTable(Principal, PrivKey, PubKey).
@@ -98,10 +101,14 @@ table AuthKeyClientTable(Principal, Principal, AuthKey).
 (* Авторизационный ключ клиента (для сервера) — по его отпечатку *)
 table AuthKeyServerTable(HashValue, AuthKey).
 
+(* Состояние клиента в секретном чате *)
+table SecretChatClientTable(Principal, Principal, Principal, Modulus, G, Z, ChatID, SessionKey).
 
-(******************************************************************************)
-(* Дополнительные функции                                                     *)
-(******************************************************************************)
+(* Состояние клиента после рекейинга *)
+table RekeyingClientTable(Principal, Principal, Principal, Modulus, G, Z, ChatID, SessionKey).
+
+
+(* Доп. функции *)
 
 (* Публичный ключ по приватному *)
 fun pk(PrivKey): PubKey.

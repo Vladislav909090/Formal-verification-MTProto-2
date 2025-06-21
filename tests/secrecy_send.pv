@@ -1,0 +1,26 @@
+set preciseActions = true.
+
+not attacker(new sk).
+not attacker(new a).
+not attacker(new b).
+not attacker(new nk).
+
+query s: Nonce, nc,ns,nk: Nonce, p: Modulus, g,g_a: G, m: bitstring, k: AuthKey;
+  event(ClientSendsCloudMessage(s, m, k))
+  && attacker(m)
+  ==> event(RevealedAuthKey(k))
+  ||  event(PostCompromisedAuthKey(k))
+  ||  event(ClientChecksDHParameters(nc, ns, nk, p, g, g_a, false)).
+
+process
+  (0
+    | !RegisterRSAKey(Server)
+    | !ServerAuth(Server)
+    | !ClientAuth(Server, true)
+    | !ServerCloudChat()
+    | !ClientCloudChat(Server)
+    | !GenGoodDHParameters()
+    | !GenBadDHParameters()
+    | !RevealAuthKey()
+    | !PostCompromiseAuthKey()
+  )

@@ -1,69 +1,33 @@
 (*
- * MTProto 2.0: Создание авторизационного ключа
- *
- * Модель протокола создания долгосрочного общего ключа между клиентом и сервером Telegram.
- * См. https://core.telegram.org/mtproto/auth_key
- *)
+Создание авторизационного ключа
+*)
 
-(******************************************************************************)
-(* Абстрактные криптографические примитивы                                   *)
-(* Определяются отдельно, чтобы не привязывать реализацию шифрования к этому файлу. *)
-(******************************************************************************)
-
-(* fpk(PubKey): HashValue — отпечаток публичного ключа *)
-(* keyID(SharedKey): HashValue — идентификатор ключа *)
-(* encodeRequestDHParams: шифрование запроса DH-параметров (RSA) *)
-(* decodeRequestDHParams: расшифровка запроса DH-параметров (RSA) *)
-(* encodeAuthorizationMsg / decodeAuthorizationMsg: AES-шифрование с IV *)
-(* hashNk: хеш по nk и ключу авторизации *)
-
-
-(******************************************************************************)
 (* Разложение на простые множители — для доказательства работы, не используется *)
-(******************************************************************************)
-
 type Prime.
 fun mult(Prime, Prime): bitstring.
 reduc forall x: Prime, y: Prime;
   factorise(mult(x,y)) = (x,y).
 
-
-(******************************************************************************)
-(* Обмен сообщениями в протоколе авторизации                                 *)
-(******************************************************************************)
-
-(* Раунд 1 *)
+(* Обмен сообщениями в протоколе авторизации *)
 fun NC(Nonce): Message [data].                     (* Клиент → Сервер *)
 fun NS(Nonce, Nonce, HashValue): Message [data].   (* Сервер → Клиент *)
-
-(* Раунд 2 *)
 fun REQDH(Nonce, Nonce, Ciphertext): Message [data]. (* Клиент → Сервер *)
 fun DH(Nonce, Nonce, Ciphertext): Message [data].    (* Сервер → Клиент *)
-
-(* Раунд 3 *)
 fun ENDH(Nonce, Nonce, Ciphertext): Message [data]. (* Клиент → Сервер *)
 fun ACK(Nonce, Nonce, HashValue): Message [data].   (* Сервер → Клиент *)
 
-(* Зашифрованные данные внутри сообщений *)
 fun D1(Nonce, Nonce, Nonce): Plaintext [data].           (* запрос DH *)
 fun AN(Nonce, Nonce, Modulus, G, G): Plaintext [data].   (* ответ с DH *)
 fun D2(Nonce, Nonce, G): Plaintext [data].               (* завершение DH *)
 
-
-(******************************************************************************)
-(* Состояние (таблицы)                                                       *)
-(******************************************************************************)
-
+(* Состояние (таблицы) *)
 table AuthProtClientEphemeralSecrets(Nonce, Z).                      (* секреты клиента *)
 table AuthProtClientSessionState(Nonce, Nonce, Nonce, Modulus, G, G, Z).
 table AuthProtServerEphemeralSecrets(Z).                             (* секрет сервера *)
 table AuthProtServerSessionState(Nonce, Nonce, Nonce, Modulus, G, G, Z).
 table DiffieHellmanParametersTable(Modulus, G).                      (* DH-параметры *)
 
-
-(******************************************************************************)
-(* События                                                                   *)
-(******************************************************************************)
+(* События *)
 
 (* Клиент начинает сессию авторизации *)
 event ClientStartsSession(Nonce).
@@ -101,11 +65,7 @@ event PostCompromisedNk(Nonce).
 event PostCompromisedAuthProtClientExponent(Z).
 event PostCompromisedAuthProtServerExponent(Z).
 
-
-(******************************************************************************)
-(* Макросы процессов: клиент и сервер                                        *)
-(******************************************************************************)
-
+(* Макросы процессов: клиент и сервер *)
 let ClientAuth(server: Principal, allowWeakDH: bool) =
   in(io, X: Principal);
   let cUser = choosePrincipal(X, Alice, Bob) in
@@ -168,11 +128,7 @@ let ServerAuth(server: Principal) =
   out(io, ACK(nc, ns, hashNk(nk, authKey)));
   0.
 
-
-(******************************************************************************)
-(* Вспомогательные процессы                                                   *)
-(******************************************************************************)
-
+(* Вспомогательные процессы *)
 let RegisterRSAKey(server: Principal) =
   new sk: PrivKey;
   insert RSAServerKeyTable(server, sk, pk(sk));
@@ -182,8 +138,13 @@ let RegisterRSAKey(server: Principal) =
   0.
 
 (* Компрометация *)
+let RevealRSAKey() = get RSAServerKeyTable(server, sk, _) in event RevealedRSAKey(sk); out(io, sk).
 let RevealAuthKey() = get AuthKeyClientTable(_, _, k) in event RevealedAuthKey(k); out(io, k).
 let RevealServerAuthKey() = get AuthKeyServerTable(_, k) in event RevealedServerAuthKey(k); out(io, k).
+let RevealNk() = get AuthProtClientEphemeralSecrets(nk, _) in event RevealedNk(nk); out(io, nk).
+let RevealAuthProtClientExponent() = get AuthProtClientEphemeralSecrets(_, b) in event RevealedAuthProtClientExponent(b); out(io, b).
+let RevealAuthProtClientEphemeralSecrets() = get AuthProtClientEphemeralSecrets(nk, b) in event RevealedAuthProtClientEphemeralSecrets(nk, b); event RevealedNk(nk); event RevealedAuthProtClientExponent(b); out(io, (nk, b)).
+let RevealAuthProtServerExponent() = get AuthProtServerEphemeralSecrets(a) in event RevealedAuthProtServerExponent(a); out(io, a).
 
 (* Пост-компрометация *)
 let PostCompromiseRSAKey() = phase 1; get RSAServerKeyTable(_, sk, _) in event PostCompromisedRSAKey(sk); out(io, sk).
@@ -195,3 +156,10 @@ let PostCompromiseAuthProtServerExponent() = phase 1; get AuthProtServerEphemera
 (* Генерация DH-параметров *)
 let GenGoodDHParameters() = insert DiffieHellmanParametersTable(STRONG, GOOD).
 let GenBadDHParameters() = new g: G; insert DiffieHellmanParametersTable(WEAK, g); insert DiffieHellmanParametersTable(STRONG, BAD); out(io, g).
+
+(* Регистрация ключа авторизации злоумышленником *)
+let RegisterAuthKey() =
+  in(io, (X: Principal, k: AuthKey));
+  if X <> Alice && X <> Bob then
+    insert AuthKeyServerTable(keyID(auth2shared(k)), k);
+    0.

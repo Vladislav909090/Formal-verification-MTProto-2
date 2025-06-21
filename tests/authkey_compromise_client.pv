@@ -1,0 +1,18 @@
+set preciseActions = true.
+
+query s, s': Nonce, m: bitstring, k: AuthKey;
+  inj-event(ClientReceivesCloudMessage(s, m, k))
+  ==> (inj-event(ServerSendsCloudMessage(s', m, k)) && s = s')
+  || event(RevealedAuthKey(k)).
+
+process
+  let weakDiffieHellman = false in
+  (0
+    | !RegisterRSAKey(Server)
+    | !ServerAuth(Server)
+    | !ClientAuth(Server, weakDiffieHellman)
+    | !ServerCloudChat()
+    | !ClientCloudChat(Server)
+    | !GenGoodDHParameters()
+    | !RevealAuthKey()
+  )
