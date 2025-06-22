@@ -16,7 +16,7 @@ QUERIES := $(filter %.pv,$(MAKECMDGOALS))
 $(QUERIES): ; @true
 
 
-.PHONY: $(QUERIES) build clean run benchmark
+.PHONY: $(QUERIES) build clean run
 
 build:
 	@if [ -f $(LIB) ]; then

@@ -101,12 +101,6 @@ table AuthKeyClientTable(Principal, Principal, AuthKey).
 (* Авторизационный ключ клиента (для сервера) — по его отпечатку *)
 table AuthKeyServerTable(HashValue, AuthKey).
 
-(* Состояние клиента в секретном чате *)
-table SecretChatClientTable(Principal, Principal, Principal, Modulus, G, Z, ChatID, SessionKey).
-
-(* Состояние клиента после рекейинга *)
-table RekeyingClientTable(Principal, Principal, Principal, Modulus, G, Z, ChatID, SessionKey).
-
 
 (* Доп. функции *)
 
